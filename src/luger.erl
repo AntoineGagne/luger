@@ -120,15 +120,16 @@ init([#config{app = AppName, host = HostName, max_msg_len = MaxLen}, SinkConfig,
     State = init_sink(#state{app = AppName, host = HostName, max_msg_len = MaxLen}, SinkConfig),
 
     ets:new(?TABLE, [named_table, public, set, {keypos, 1}, {read_concurrency, true}]),
-    true = ets:insert_new(?TABLE, {state, State#state{
+    persist_state(State#state{
         single_line = SingleLine,
         throttle_threshold = ThrottleThreshold
-    }}),
+    }),
 
     {ok, self(), undefined}.
 
 terminate(_Reason, _State) ->
     error_logger:delete_report_handler(luger_error_logger),
+    remove_state(),
     ok.
 
 
@@ -157,7 +158,7 @@ log(Priority, Channel, Message) ->
 log(_Priority, _Channel, _Message, undefined) ->
     {error, luger_not_running};
 log(Priority, Channel, Message, _) ->
-    [{state, State}] = ets:lookup(?TABLE, state),
+    State = get_state(),
 
     #state{throttle_threshold = Threshold} = State,
 
@@ -241,3 +242,28 @@ log_to(Priority, syslog_udp, Data0, State = #state{syslog_udp_socket = Socket,
                       [{Socket, Host, Port}, Reason]),
             log_to(Priority, stderr, Data0, State)
     end.
+
+-ifdef(OTP_20_OR_EARLIER).
+persist_state(State) ->
+    true = ets:insert_new(?TABLE, {state, State#state{
+        single_line = SingleLine,
+        throttle_threshold = ThrottleThreshold
+    }}).
+
+get_state() ->
+    [{state, State}] = ets:lookup(?TABLE, state),
+    State.
+
+remove_state() ->
+    ok.
+-else.
+persist_state(State) ->
+    persistent_term:put({?MODULE, state}, State).
+
+get_state() ->
+    persistent_term:get({?MODULE, state}).
+
+remove_state() ->
+    persistent_term:erase({?MODULE, state}),
+    ok.
+-endif.
